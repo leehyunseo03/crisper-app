@@ -24,6 +24,7 @@ dist-ssr
 *.sw?
 
 #custom ignore list
+.vscode
 src-tauri/binaries/*
 src-tauri/models/*
 src-tauri/icons/*

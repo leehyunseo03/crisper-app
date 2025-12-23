@@ -5,9 +5,28 @@ use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 use std::env;
 
+#[tauri::command]
+async fn download_model(app_handle: tauri::AppHandle, url: String, filename: String) -> Result<String, String> {
+    eprintln!("🚀 다운로드 요청 수신: {} -> {}", url, filename);
+    
+    // 모델이 저장될 폴더 경로 (src-tauri/models)
+    let model_dir = app_handle.path().resource_dir().unwrap().join("models");
+    
+    // 폴더가 없으면 생성
+    if !model_dir.exists() {
+        std::fs::create_dir_all(&model_dir).map_err(|e| e.to_string())?;
+    }
+
+    // 여기에 실제 다운로드 로직이 들어갑니다. (현재는 성공 메시지만 반환)
+    // 실제 구현은 reqwest 등의 라이브러리를 사용하게 됩니다.
+    
+    Ok(format!("{} 모델 다운로드 준비 완료 (경로: {:?})", filename, model_dir))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![download_model])
         .setup(|app| {
             let resource_path = app.path().resource_dir().unwrap().join("binaries");
             

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import ChatRoom from "./components/ChatRoom"; // 채팅 컴포넌트 분리
+import ModelStore from "./components/ModelStore";
 
 // 메뉴 타입 정의
 type Menu = "채팅" | "디지털 유전자" | "프로젝트 탐색" | "모델 다운로드";
@@ -26,7 +27,7 @@ function App() {
         padding: "20px 0"
       }}>
         <div style={{ padding: "0 20px 30px", fontSize: "1.5rem", fontWeight: "bold", color: "#89b4fa" }}>
-          Crisper AI 🇰🇷
+          Crisper
         </div>
         
         {menuItems.map((item) => (
@@ -64,16 +65,11 @@ function App() {
         {activeMenu === "프로젝트 탐색" && (
           <div style={{ padding: "40px", textAlign: "center" }}>
             <h2>🌐 프로젝트 탐색</h2>
-            <p>커뮤니티의 최신 AI 프로젝트를 확인하세요. (준비 중)</p>
+            <p>프로젝트 공유기능 들어갈 예정(준비 중)</p>
           </div>
         )}
 
-        {activeMenu === "모델 다운로드" && (
-          <div style={{ padding: "40px", textAlign: "center" }}>
-            <h2>📥 모델 다운로드</h2>
-            <p>HuggingFace에서 GGUF 모델을 로컬로 가져옵니다. (준비 중)</p>
-          </div>
-        )}
+        {activeMenu === "모델 다운로드" && <ModelStore />}
       </main>
     </div>
   );
