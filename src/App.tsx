@@ -1,6 +1,8 @@
+//src/App.tsx
 import { useState } from "react";
 import ChatRoom from "./components/ChatRoom"; // 채팅 컴포넌트 분리
 import ModelStore from "./components/ModelStore";
+import Genifier from "./components/Genifier";
 
 // 메뉴 타입 정의
 type Menu = "채팅" | "디지털 유전자" | "프로젝트 탐색" | "모델 다운로드";
@@ -55,12 +57,7 @@ function App() {
       <main style={{ flex: 1, position: "relative", overflowY: "auto", display: "flex", flexDirection: "column" }}>
         {activeMenu === "채팅" && <ChatRoom />}
         
-        {activeMenu === "디지털 유전자" && (
-          <div style={{ padding: "40px", textAlign: "center" }}>
-            <h2>🧬 디지털 유전자 (Graph Index)</h2>
-            <p>사용자 데이터를 분석하여 관계형 그래프를 생성합니다. (준비 중)</p>
-          </div>
-        )}
+        {activeMenu === "디지털 유전자" && <Genifier />}
 
         {activeMenu === "프로젝트 탐색" && (
           <div style={{ padding: "40px", textAlign: "center" }}>
