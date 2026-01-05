@@ -1,3 +1,4 @@
+// src/components/Genifier.tsx
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -6,165 +7,179 @@ import GraphVisualizer from './GraphVisualizer';
 export default function Genifier() {
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [log, setLog] = useState<string>("");
-  const [selectedPath, setSelectedPath] = useState<string | null>(null); // 선택된 경로 상태 저장
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [refreshGraph, setRefreshGraph] = useState(0);
+  const [isPanelOpen, setIsPanelOpen] = useState(true); // 패널 토글 상태
 
-  // 1. 폴더 선택 핸들러
   const handleSelectFolder = async () => {
     try {
       const path = await open({
         directory: true,
         multiple: false,
       });
-
       if (path) {
         setSelectedPath(path);
-        setLog(`📂 폴더가 선택되었습니다: ${path}`);
-        setStatus("idle"); // 상태 초기화
+        setLog(`📂 선택됨: ${path}`);
+        setStatus("idle");
       }
     } catch (error) {
       console.error(error);
-      setLog(`경로 선택 중 에러: ${String(error)}`);
+      setLog(`에러: ${String(error)}`);
     }
   };
 
-  // 2. 임베딩(그래프 생성) 시작 핸들러
   const handleStartEmbedding = async () => {
-    if (!selectedPath) {
-      setLog("⚠️ 먼저 폴더를 선택해주세요.");
-      return;
-    }
-
+    if (!selectedPath) return;
     try {
       setStatus("loading");
-      setLog((prev) => prev + `\n\n🚀 [SurrealDB] 그래프 생성 시작...`);
-
-      // Rust 백엔드 호출
-      console.log("Value:", selectedPath);
-      console.log("Type:", typeof selectedPath);
+      setLog((prev) => prev + `\n🚀 분석 시작...`);
+      
       const result = await invoke<string>("process_pdfs_graph", {
         path: selectedPath,
       });
 
       setLog((prev) => prev + `\n✅ 완료: ${result}`);
       setStatus("success");
-
       setRefreshGraph(prev => prev + 1);
     } catch (error) {
-      console.error(error);
-      setLog((prev) => prev + `\n❌ 에러 발생: ${String(error)}`);
+      setLog((prev) => prev + `\n❌ 실패: ${String(error)}`);
       setStatus("error");
     }
   };
 
   return (
-    <div style={{ padding: "40px", color: "#cdd6f4", maxWidth: "800px", margin: "0 auto" }}>
-      <h2 style={{ color: "#89b4fa" }}>🧬 디지털 유전자 (Graph Index)</h2>
-      <p style={{ marginBottom: "30px", color: "#a6adc8" }}>
-        학습시킬 PDF 문서들이 들어있는 폴더를 선택하고, 그래프 생성을 시작하세요.
-      </p>
+    <div style={{ position: "relative", width: "100%", height: "100%", backgroundColor: "#1e1e2e" }}>
+      
+      {/* --- Layer 1: 배경 그래프 (항상 표시) --- */}
+      <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
+        <GraphVisualizer refreshKey={refreshGraph} />
+      </div>
 
-      {/* --- 1단계: 폴더 선택 영역 --- */}
-      <div style={{ marginBottom: "20px" }}>
-        <h3 style={{ fontSize: "1.1rem", marginBottom: "10px", color: "#fab387" }}>Step 1. 폴더 선택</h3>
-        <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+      {/* --- Layer 2: 컨트롤 패널 (플로팅) --- */}
+      <div 
+        style={{
+          position: "absolute",
+          top: "20px",
+          right: "20px",
+          width: "320px",
+          backgroundColor: "rgba(30, 30, 46, 0.85)", // 반투명 배경
+          backdropFilter: "blur(10px)", // 블러 효과
+          borderRadius: "12px",
+          border: "1px solid #45475a",
+          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3)",
+          zIndex: 10,
+          display: "flex",
+          flexDirection: "column",
+          transition: "transform 0.3s ease",
+          transform: isPanelOpen ? "translateX(0)" : "translateX(340px)", // 패널 숨김 처리
+          maxHeight: "calc(100vh - 40px)",
+        }}
+      >
+        {/* 패널 헤더 */}
+        <div style={{ 
+          padding: "15px 20px", 
+          borderBottom: "1px solid #313244", 
+          display: "flex", 
+          justifyContent: "space-between", 
+          alignItems: "center" 
+        }}>
+          <h3 style={{ margin: 0, color: "#89b4fa", fontSize: "1rem" }}>🛠️ Control Panel</h3>
+          <button 
+            onClick={() => setIsPanelOpen(false)}
+            style={{ background: "none", border: "none", color: "#a6adc8", cursor: "pointer" }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* 패널 내용 */}
+        <div style={{ padding: "20px", overflowY: "auto" }}>
+          
+          {/* 폴더 선택 */}
+          <div style={{ marginBottom: "20px" }}>
+            <label style={{ display: "block", color: "#fab387", marginBottom: "8px", fontSize: "0.9rem" }}>Data Source</label>
+            <button
+              onClick={handleSelectFolder}
+              style={{
+                width: "100%",
+                padding: "10px",
+                borderRadius: "6px",
+                border: "1px solid #45475a",
+                backgroundColor: "#313244",
+                color: selectedPath ? "#a6e3a1" : "#cdd6f4",
+                cursor: "pointer",
+                textAlign: "left",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                fontSize: "0.85rem"
+              }}
+            >
+              {selectedPath || "📂 폴더 선택하기..."}
+            </button>
+          </div>
+
+          {/* 실행 버튼 */}
           <button
-            onClick={handleSelectFolder}
-            disabled={status === "loading"}
+            onClick={handleStartEmbedding}
+            disabled={!selectedPath || status === "loading"}
             style={{
-              padding: "12px 20px",
-              fontSize: "1rem",
+              width: "100%",
+              padding: "12px",
               borderRadius: "8px",
-              border: "1px solid #45475a",
-              backgroundColor: "#313244",
-              color: "#cdd6f4",
-              cursor: status === "loading" ? "not-allowed" : "pointer",
-              transition: "0.2s",
-              flexShrink: 0,
+              border: "none",
+              backgroundColor: (!selectedPath || status === "loading") ? "#45475a" : "#89b4fa",
+              color: (!selectedPath || status === "loading") ? "#a6adc8" : "#1e1e2e",
+              fontWeight: "bold",
+              cursor: (!selectedPath || status === "loading") ? "not-allowed" : "pointer",
+              transition: "0.2s"
             }}
           >
-            📂 폴더 열기
+            {status === "loading" ? "⏳ 처리 중..." : "🚀 그래프 생성 / 업데이트"}
           </button>
-          
-          <div style={{ 
-            flex: 1, 
-            padding: "12px", 
-            backgroundColor: "#181825", 
-            borderRadius: "8px", 
-            border: "1px solid #313244",
-            color: selectedPath ? "#a6e3a1" : "#585b70",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            fontFamily: "monospace"
-          }}>
-            {selectedPath || "선택된 폴더 없음"}
+
+          {/* 로그 영역 (간소화) */}
+          <div style={{ marginTop: "20px" }}>
+            <label style={{ display: "block", color: "#bac2de", marginBottom: "8px", fontSize: "0.9rem" }}>System Log</label>
+            <div style={{
+              backgroundColor: "#11111b",
+              padding: "10px",
+              borderRadius: "6px",
+              height: "150px",
+              overflowY: "auto",
+              fontSize: "0.75rem",
+              fontFamily: "monospace",
+              color: "#a6adc8",
+              border: "1px solid #313244"
+            }}>
+              {log || "대기 중..."}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* --- 2단계: 실행 버튼 영역 --- */}
-      <div style={{ marginBottom: "30px" }}>
-        <h3 style={{ fontSize: "1.1rem", marginBottom: "10px", color: "#fab387" }}>Step 2. 그래프 생성</h3>
+      {/* 패널 열기 버튼 (패널이 닫혔을 때 표시) */}
+      {!isPanelOpen && (
         <button
-          onClick={handleStartEmbedding}
-          disabled={!selectedPath || status === "loading"}
+          onClick={() => setIsPanelOpen(true)}
           style={{
-            width: "100%",
-            padding: "15px",
-            fontSize: "1.1rem",
-            borderRadius: "10px",
+            position: "absolute",
+            top: "20px",
+            right: "20px",
+            zIndex: 10,
+            padding: "10px 15px",
+            backgroundColor: "#89b4fa",
+            color: "#1e1e2e",
             border: "none",
-            // 경로가 없으면 회색, 로딩중이면 노란색, 준비되면 파란색
-            backgroundColor: !selectedPath ? "#45475a" : status === "loading" ? "#f9e2af" : "#89b4fa",
-            color: !selectedPath ? "#a6adc8" : "#1e1e2e",
+            borderRadius: "8px",
             fontWeight: "bold",
-            cursor: (!selectedPath || status === "loading") ? "not-allowed" : "pointer",
-            transition: "all 0.3s ease",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            gap: "10px"
+            cursor: "pointer",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.3)"
           }}
         >
-          {status === "loading" ? (
-            <>⏳ 분석 및 임베딩 진행 중...</>
-          ) : (
-            <>🚀 임베딩 시작 (Graph Indexing)</>
-          )}
+          ⚙️ 옵션
         </button>
-      </div>
-
-      {/* --- 로그 출력 영역 --- */}
-      <div
-        style={{
-          marginTop: "20px",
-          backgroundColor: "#11111b",
-          padding: "20px",
-          borderRadius: "10px",
-          fontFamily: "monospace",
-          fontSize: "0.9rem",
-          whiteSpace: "pre-wrap",
-          minHeight: "150px",
-          maxHeight: "300px",
-          overflowY: "auto",
-          border: "1px solid #313244",
-          color: status === "error" ? "#f38ba8" : "#bac2de",
-          boxShadow: "inset 0 0 10px rgba(0,0,0,0.5)"
-        }}
-      >
-        <div style={{ color: "#6c7086", marginBottom: "10px", borderBottom: "1px solid #313244", paddingBottom: "5px" }}>
-          🖥️ System Logs
-        </div>
-        {log || "대기 중..."}
-      </div>
-      <div style={{ marginTop: "40px" }}>
-        <h3 style={{ fontSize: "1.1rem", marginBottom: "15px", color: "#fab387" }}>
-            Step 3. Knowledge Graph Visualization
-        </h3>
-        {/* 그래프 컴포넌트 배치 */}
-        <GraphVisualizer refreshKey={refreshGraph} />
-      </div>
+      )}
     </div>
   );
 }
