@@ -20,7 +20,7 @@
     "security": {
       "csp": null
     }
-  },
+  },    
   "bundle": {
     "active": true,
     "targets": "all",
@@ -36,7 +36,8 @@
     ],
     "resources": [
       "binaries/*.dll",
-      "models/ggml-model-Q4_K_M.gguf"
+      "models/ggml-model-Q4_K_M.gguf",
+      "models/qwen2.5-7b-instruct-q2_k.gguf"
     ]
   }
 }

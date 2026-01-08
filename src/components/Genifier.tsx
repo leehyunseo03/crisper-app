@@ -9,7 +9,26 @@ export default function Genifier() {
   const [log, setLog] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [refreshGraph, setRefreshGraph] = useState(0);
-  const [isPanelOpen, setIsPanelOpen] = useState(true); // 패널 토글 상태
+  const [isPanelOpen, setIsPanelOpen] = useState(true);
+  const [useGpu, setUseGpu] = useState(false);
+
+  const handleToggleGpu = async () => {
+    const nextState = !useGpu;
+    setUseGpu(nextState); // UI 즉시 반영
+    
+    setLog(prev => prev + `\n🔄 ${nextState ? "GPU" : "CPU"} 모드로 전환 중... (서버 재시작)`);
+    setStatus("loading"); // 잠시 로딩 표시
+
+    try {
+      const msg = await invoke<string>("toggle_gpu", { enable: nextState });
+      setLog(prev => prev + `\n✅ 완료: ${msg}`);
+      setStatus("idle");
+    } catch (e) {
+      setLog(prev => prev + `\n❌ 전환 실패: ${String(e)}`);
+      setStatus("error");
+      setUseGpu(!nextState); // 실패 시 스위치 원상복구
+    }
+  };
 
   const handleSelectFolder = async () => {
     try {
@@ -32,16 +51,19 @@ export default function Genifier() {
     if (!selectedPath) return;
     try {
       setStatus("loading");
-      setLog((prev) => prev + `\n🚀 분석 시작...`);
+      setLog((prev) => prev + `\n🚀 분석 시작... (PDF 텍스트 추출 및 임베딩)`);
       
-      const result = await invoke<string>("process_pdfs_graph", {
+      // 🚨 [수정됨] 백엔드 함수명 'process_pdfs'와 일치시킴
+      const result = await invoke<string>("process_pdfs", {
         path: selectedPath,
       });
 
       setLog((prev) => prev + `\n✅ 완료: ${result}`);
       setStatus("success");
+      // 그래프 갱신 트리거
       setRefreshGraph(prev => prev + 1);
     } catch (error) {
+      console.error(error);
       setLog((prev) => prev + `\n❌ 실패: ${String(error)}`);
       setStatus("error");
     }
@@ -50,20 +72,21 @@ export default function Genifier() {
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", backgroundColor: "#1e1e2e" }}>
       
-      {/* --- Layer 1: 배경 그래프 (항상 표시) --- */}
+      {/* --- Layer 1: 배경 그래프 --- */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
-        <GraphVisualizer refreshKey={refreshGraph} />
+        {/* viewMode를 "all"로 전달하여 모든 노드 조회 */}
+        <GraphVisualizer refreshKey={refreshGraph} viewMode="all" />
       </div>
 
-      {/* --- Layer 2: 컨트롤 패널 (플로팅) --- */}
+      {/* --- Layer 2: 컨트롤 패널 --- */}
       <div 
         style={{
           position: "absolute",
           top: "20px",
           right: "20px",
           width: "320px",
-          backgroundColor: "rgba(30, 30, 46, 0.85)", // 반투명 배경
-          backdropFilter: "blur(10px)", // 블러 효과
+          backgroundColor: "rgba(30, 30, 46, 0.85)",
+          backdropFilter: "blur(10px)",
           borderRadius: "12px",
           border: "1px solid #45475a",
           boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3)",
@@ -71,11 +94,11 @@ export default function Genifier() {
           display: "flex",
           flexDirection: "column",
           transition: "transform 0.3s ease",
-          transform: isPanelOpen ? "translateX(0)" : "translateX(340px)", // 패널 숨김 처리
+          transform: isPanelOpen ? "translateX(0)" : "translateX(340px)",
           maxHeight: "calc(100vh - 40px)",
         }}
       >
-        {/* 패널 헤더 */}
+        {/* 헤더 */}
         <div style={{ 
           padding: "15px 20px", 
           borderBottom: "1px solid #313244", 
@@ -83,7 +106,7 @@ export default function Genifier() {
           justifyContent: "space-between", 
           alignItems: "center" 
         }}>
-          <h3 style={{ margin: 0, color: "#89b4fa", fontSize: "1rem" }}>🛠️ Control Panel</h3>
+          <h3 style={{ margin: 0, color: "#89b4fa", fontSize: "1rem" }}>🛠️ Knowledge Graph</h3>
           <button 
             onClick={() => setIsPanelOpen(false)}
             style={{ background: "none", border: "none", color: "#a6adc8", cursor: "pointer" }}
@@ -92,12 +115,47 @@ export default function Genifier() {
           </button>
         </div>
 
-        {/* 패널 내용 */}
+        {/* 컨텐츠 */}
         <div style={{ padding: "20px", overflowY: "auto" }}>
+          {/* ⚡ GPU 스위치 UI 추가 */}
+          <div style={{ 
+            marginBottom: "20px", 
+            padding: "10px", 
+            backgroundColor: "#313244", 
+            borderRadius: "8px",
+            border: "1px solid #45475a",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center"
+          }}>
+            <div>
+              <div style={{ color: "#cdd6f4", fontWeight: "bold", fontSize: "0.9rem" }}>
+                🚀 Hardware Accel
+              </div>
+              <div style={{ color: "#a6adc8", fontSize: "0.75rem" }}>
+                {useGpu ? "NVIDIA GPU (CUDA)" : "Intel CPU Only"}
+              </div>
+            </div>
+            
+            <button
+              onClick={handleToggleGpu}
+              style={{
+                padding: "6px 12px",
+                borderRadius: "20px",
+                border: "none",
+                fontWeight: "bold",
+                cursor: "pointer",
+                transition: "0.3s",
+                backgroundColor: useGpu ? "#a6e3a1" : "#45475a", // 켜지면 초록, 꺼지면 회색
+                color: useGpu ? "#1e1e2e" : "#bac2de"
+              }}
+            >
+              {useGpu ? "ON" : "OFF"}
+            </button>
+          </div>
           
-          {/* 폴더 선택 */}
           <div style={{ marginBottom: "20px" }}>
-            <label style={{ display: "block", color: "#fab387", marginBottom: "8px", fontSize: "0.9rem" }}>Data Source</label>
+            <label style={{ display: "block", color: "#fab387", marginBottom: "8px", fontSize: "0.9rem" }}>PDF Source</label>
             <button
               onClick={handleSelectFolder}
               style={{
@@ -119,7 +177,6 @@ export default function Genifier() {
             </button>
           </div>
 
-          {/* 실행 버튼 */}
           <button
             onClick={handleStartEmbedding}
             disabled={!selectedPath || status === "loading"}
@@ -135,12 +192,11 @@ export default function Genifier() {
               transition: "0.2s"
             }}
           >
-            {status === "loading" ? "⏳ 처리 중..." : "🚀 그래프 생성 / 업데이트"}
+            {status === "loading" ? "⏳ 지식 추출 중..." : "🚀 그래프 생성 / 업데이트"}
           </button>
 
-          {/* 로그 영역 (간소화) */}
           <div style={{ marginTop: "20px" }}>
-            <label style={{ display: "block", color: "#bac2de", marginBottom: "8px", fontSize: "0.9rem" }}>System Log</label>
+            <label style={{ display: "block", color: "#bac2de", marginBottom: "8px", fontSize: "0.9rem" }}>Process Log</label>
             <div style={{
               backgroundColor: "#11111b",
               padding: "10px",
@@ -150,7 +206,8 @@ export default function Genifier() {
               fontSize: "0.75rem",
               fontFamily: "monospace",
               color: "#a6adc8",
-              border: "1px solid #313244"
+              border: "1px solid #313244",
+              whiteSpace: "pre-wrap"
             }}>
               {log || "대기 중..."}
             </div>
@@ -158,7 +215,6 @@ export default function Genifier() {
         </div>
       </div>
 
-      {/* 패널 열기 버튼 (패널이 닫혔을 때 표시) */}
       {!isPanelOpen && (
         <button
           onClick={() => setIsPanelOpen(true)}
@@ -177,7 +233,7 @@ export default function Genifier() {
             boxShadow: "0 4px 12px rgba(0,0,0,0.3)"
           }}
         >
-          ⚙️ 옵션
+          ⚙️ 설정
         </button>
       )}
     </div>
