@@ -103,12 +103,14 @@ pub struct GraphNode {
     pub group: String,
     pub label: String,
     pub val: usize,
+    pub info: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
 pub struct GraphLink {
     pub source: String,
     pub target: String,
+    pub label: Option<String>,
 }
 
 #[derive(Serialize, Debug)]

@@ -18,10 +18,17 @@ interface GraphData {
   links: GraphLink[];
 }
 
+interface GraphVisualizerProps {
+  refreshKey: number;
+  viewMode?: string;
+  onNodeClick: (node: GraphNode) => void; // 👈 부모 컴포넌트로 노드 정보를 넘겨줄 콜백
+}
+
 // 🚨 [수정됨] viewMode props 추가 (Rust 백엔드 인자 대응)
-const GraphVisualizer = ({ refreshKey, viewMode = "all" }: { refreshKey: number, viewMode?: string }) => {
+const GraphVisualizer = ({ refreshKey, viewMode = "all", onNodeClick }: GraphVisualizerProps) => {
   const [data, setData] = useState<GraphData>({ nodes: [], links: [] });
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [hoverNode, setHoverNode] = useState<any>(null)
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
 
@@ -40,9 +47,6 @@ const GraphVisualizer = ({ refreshKey, viewMode = "all" }: { refreshKey: number,
 
   // 2. 데이터 로드 (Rust 통신)
   useEffect(() => {
-    // 🚨 [수정됨] Rust의 fetch_graph_data(state, view_mode) 시그니처와 일치시킴
-    // Rust에서 변수명은 snake_case(view_mode), JS 객체 키는 camelCase로 자동 변환될 수 있으나
-    // Tauri invoke에서는 명시적으로 Rust 인자명(view_mode)을 사용하는 것이 안전함.
     invoke<GraphData>('fetch_graph_data', { viewMode: viewMode }) 
       .then((graphData) => {
         const safeData = {
@@ -70,30 +74,79 @@ const GraphVisualizer = ({ refreshKey, viewMode = "all" }: { refreshKey: number,
           width={dimensions.width}
           height={dimensions.height}
           graphData={data}
-          backgroundColor="#11111b"
+          onNodeClick={onNodeClick}
           
-          nodeLabel="label"
-          // 🚨 [수정됨] 백엔드 모델(Entity, Chunk)에 따른 색상 분기 추가
-          nodeColor={(node: any) => {
-            switch (node.group) {
-              case 'event': return '#f38ba8';    // Red (Import Session)
-              case 'document': return '#89b4fa'; // Blue (PDF Files)
-              case 'entity': return '#fab387';   // Orange (Knowledge Entities) - 중요!
-              case 'chunk': return '#45475a';    // Gray (Raw Text Chunks) - 배경처럼 처리
-              default: return '#a6e3a1';         // Green (Default)
-            }
+          // --- 호버 이벤트 설정 ---
+          onNodeHover={(node) => setHoverNode(node)}
+          
+          // --- 간선(Link) 디자인: 호버 상태에 따라 동적 렌더링 ---
+          linkCanvasObjectMode={() => 'after'} // 기존 선 위에 추가로 그림
+          linkCanvasObject={(link: any, ctx, globalScale) => {
+            // 데이터 확인: label이 없으면 리턴
+            const label = link.label;
+            if (!label) return;
+
+            // 소스/타겟이 객체인지 문자열인지 판별하여 호버 여부 확인
+            const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+            const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+            const isConnected = hoverNode && (sourceId === hoverNode.id || targetId === hoverNode.id);
+
+            // 호버되지 않은 상태에서 줌이 너무 낮으면 렌더링 스킵
+            if (!isConnected && globalScale < 1.5) return;
+
+            // 좌표 추출
+            const start = link.source;
+            const end = link.target;
+            if (typeof start !== 'object' || typeof end !== 'object') return;
+
+            const textPos = {
+              x: start.x + (end.x - start.x) * 0.5,
+              y: start.y + (end.y - start.y) * 0.5,
+            };
+
+            // 폰트 설정: 호버 시 더 크고 굵게
+            const fontSize = isConnected ? (16 / globalScale) : (8 / globalScale);
+            ctx.font = `${isConnected ? 'bold' : 'normal'} ${fontSize}px Sans-Serif`;
+            
+            // 가독성을 위한 텍스트 배경 박스
+            const textWidth = ctx.measureText(label).width;
+            const padding = 2;
+            
+            ctx.fillStyle = isConnected ? 'rgba(249, 226, 175, 0.95)' : 'rgba(30, 30, 46, 0.8)';
+            ctx.fillRect(
+              textPos.x - (textWidth / 2) - padding,
+              textPos.y - (fontSize / 2) - padding,
+              textWidth + (padding * 2),
+              fontSize + (padding * 2)
+            );
+
+            // 텍스트 그리기
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = isConnected ? '#11111b' : '#cba6f7';
+            ctx.fillText(label, textPos.x, textPos.y);
           }}
-          // 백엔드에서 val을 보내주므로 노드 크기에 반영됨
-          nodeVal={(node: any) => node.val}
+
+          // 호버 시 간선 색상도 강조
+          linkColor={(link: any) => {
+            if (hoverNode && (link.source.id === hoverNode.id || link.target.id === hoverNode.id)) {
+              return '#f9e2af'; // 호버 연결선은 노란색
+            }
+            return '#45475a';
+          }}
           
-          // 링크 스타일
-          linkColor={() => '#585b70'}
-          linkWidth={1.5}
-          linkDirectionalParticles={2}
-          linkDirectionalParticleWidth={2}
-          
-          onEngineStop={() => {
-            if(data.nodes.length > 0) fgRef.current?.zoomToFit(400);
+          linkWidth={(link: any) => {
+            return hoverNode && (link.source.id === hoverNode.id || link.target.id === hoverNode.id) ? 2 : 1;
+          }}
+
+          linkDirectionalArrowLength={(link: any) => {
+            return hoverNode && (link.source.id === hoverNode.id || link.target.id === hoverNode.id) ? 5 : 2;
+          }}
+
+          nodeColor={(node: any) => {
+            if (node === hoverNode) return '#f38ba8'; // 호버된 노드는 빨간색 계열
+            if (node.group === 'entity') return '#fab387';
+            return '#45475a';
           }}
         />
       )}

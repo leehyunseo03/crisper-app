@@ -8,7 +8,7 @@ use reqwest::{Client, Response};
 pub async fn extract_knowledge(
     base_url: &str, 
     text: &str
-) -> Result<LlmExtractionResult, Box<dyn Error>> {
+) -> Result<LlmExtractionResult, Box<dyn Error + Send + Sync>> {
 
     let client = reqwest::Client::new();
     

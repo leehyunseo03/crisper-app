@@ -57,7 +57,7 @@ async fn start_servers(app: &AppHandle, use_gpu: bool) {
     // 3. GPU 옵션 결정
     // GPU 모드면 99레이어(전부), CPU 모드면 0레이어
     let embed_gpu = if use_gpu { "99" } else { "0" };
-    let chat_gpu  = if use_gpu { "10" } else { "0" }; // 채팅은 VRAM 부족 방지로 10만
+    let chat_gpu  = if use_gpu { "99" } else { "0" }; // 채팅은 VRAM 부족 방지로 10만
 
     println!("🚀 서버 시작 (GPU 모드: {})", use_gpu);
 
@@ -86,12 +86,26 @@ async fn start_servers(app: &AppHandle, use_gpu: bool) {
             "--alias", "gpt-3.5-turbo",
             "--port", "8081", 
             "--host", "127.0.0.1",
-            //"--api", "openai",
+            //"--api", "openai",bn  
             "--ctx-size", "4096", "--batch-size", "2048", "--ubatch-size", "2048",
             "--parallel", "2",
             "--n-gpu-layers", chat_gpu // 👈 동적 할당
         ])
         .spawn().expect("8081 서버 실패");
+
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = rx2.recv().await {
+            if let CommandEvent::Stdout(line) = event {
+                let log = String::from_utf8_lossy(&line);
+                // 너무 많은 로그가 나오지 않게 중요한 정보만 필터링해서 출력
+                if log.contains("CUDA") || log.contains("offloading") || log.contains("listening") {
+                    println!("[Chat-8081] {}", log.trim());
+                }
+            } else if let CommandEvent::Stderr(line) = event {
+                eprintln!("[Chat-ERR] {}", String::from_utf8_lossy(&line).trim());
+            }
+        }
+    });
 
     state.server_handles.lock().unwrap().push(child2);
 

@@ -6,10 +6,12 @@ use uuid::Uuid;
 use chrono::Utc;
 use surrealdb::engine::local::Db;
 use surrealdb::Surreal;
+use surrealdb::sql::Thing;
 use rig::embeddings::EmbeddingsBuilder;
 use rig::client::EmbeddingsClient;
 
-use crate::models::{EventNode, DocumentNode, ChunkNode};
+use crate::models::{EventNode, DocumentNode, ChunkNode, EntityNode, LlmExtractionResult};
+use crate::utils::sanitize_id;
 use crate::utils::{extract_text_from_pdf, chunk_text, RigDoc};
 use crate::llm::extractor::extract_knowledge;
 use crate::AppState;
@@ -104,20 +106,53 @@ pub async fn process_pdfs(
             let gen_url = "http://127.0.0.1:8081/v1"; 
 
             // 🧠 지식 추출
-            if i < 10 { // 테스트를 위해 10개 청크만
+            if i < 20 { 
                 println!("🤖 Extracting info from chunk {} of {}...", i, filename);
                 
-                // 직접 호출한 extractor 함수 사용
                 match extract_knowledge(gen_url, txt).await {
                     Ok(result) => {
-                        println!("  ✅ Found {} entities, {} relations", result.entities.len(), result.relations.len());
+                        println!("\n========================================");
+                        println!("📄 [Extraction Result] Chunk #{}", i);
+                        println!("========================================");
+
+                        // 1. Entities 출력
+                        println!("🔹 Found {} Entities:", result.entities.len());
+                        for (idx, entity) in result.entities.iter().enumerate() {
+                            println!(
+                                "   {}. [{}] {} - {}", 
+                                idx + 1, 
+                                entity.category, 
+                                entity.name, 
+                                entity.summary
+                            );
+                        }
+
+                        println!("----------------------------------------");
+
+                        // 2. Relations 출력
+                        println!("🔸 Found {} Relations:", result.relations.len());
+                        for (idx, rel) in result.relations.iter().enumerate() {
+                            println!(
+                                "   {}. {} --[{}]--> {} (Why: {})", 
+                                idx + 1, 
+                                rel.head, 
+                                rel.relation, 
+                                rel.tail, 
+                                rel.reason
+                            );
+                        }
+                        println!("========================================\n");
                         
-                        // TODO: 추출된 entity와 relation을 DB에 저장하는 로직 추가
-                        // 예: save_graph_data(&db, doc_id, result).await;
+                        // TODO: 여기서 DB 저장 로직 수행 (GraphRAG 구축)
+                        println!("💾 Saving Graph Data to DB...");
+                        if let Err(e) = save_graph_data(db, chunk_uuid.clone(), &result).await {
+                             eprintln!("❌ Failed to save graph data: {}", e);
+                        } else {
+                             println!("✅ Graph Data Saved!");
+                        }
                     },
                     Err(e) => {
-                        println!("  ❌ Extraction failed: {}", e);
-                        // 에러가 나도 전체 프로세스는 죽지 않도록 로그만 남기고 계속 진행
+                        println!("❌ Extraction failed: {}", e);
                     }
                 }
             }
@@ -125,4 +160,88 @@ pub async fn process_pdfs(
     }
 
     Ok("Done".to_string())
+}
+
+async fn save_graph_data(
+    db: &Surreal<Db>,
+    chunk_id: String,
+    data: &LlmExtractionResult,
+) -> Result<(), String> {
+    
+    // 1. Entity 저장 및 Chunk와 연결
+    for entity in &data.entities {
+        let safe_name = sanitize_id(&entity.name);
+        
+        // 🌟 [수정 핵심] Rust에서 직접 Thing(ID) 객체 생성
+        let chunk_thing = Thing::from(("chunk", chunk_id.as_str()));
+        let entity_thing = Thing::from(("entity", safe_name.as_str()));
+
+        // 1-1. Entity 생성/업데이트
+        let _: Option<EntityNode> = db
+            .upsert(("entity", &safe_name))
+            .content(EntityNode {
+                id: None,
+                name: entity.name.clone(),
+                category: entity.category.clone(),
+                description: entity.summary.clone(),
+                embedding: vec![],
+                created_at: Utc::now(),
+            })
+            .await
+            .map_err(|e| format!("Entity Upsert Error: {}", e))?;
+
+        // 1-2. Chunk -> Entity 연결 (SQL이 훨씬 깔끔해집니다)
+        // 기존: RELATE type::thing(...) -> ...
+        // 변경: RELATE $c -> mentions -> $e
+        let sql = "RELATE $c -> mentions -> $e";
+        
+        let _ = db.query(sql)
+            // 🌟 String 대신 Thing 객체를 바인딩합니다.
+            // DB는 이걸 받아서 "아, 이건 문자열이 아니라 레코드 ID구나"라고 바로 인식합니다.
+            .bind(("c", chunk_thing)) 
+            .bind(("e", entity_thing))
+            .await
+            .map_err(|e| format!("Relate Chunk-Entity Error: {}", e))?;
+    }
+
+    // 2. Relation (Entity -> Entity) 저장
+    for rel in &data.relations {
+        let head_safe = sanitize_id(&rel.head);
+        let tail_safe = sanitize_id(&rel.tail);
+
+        // 🌟 여기도 Thing 객체 생성
+        let head_thing = Thing::from(("entity", head_safe.as_str()));
+        let tail_thing = Thing::from(("entity", tail_safe.as_str()));
+
+        // Head/Tail 노드 이름 보장 (빈 껍데기 생성)
+        let _ = db.query("UPDATE type::thing('entity', $id) SET name = $name RETURN NONE")
+            .bind(("id", head_safe.clone()))
+            .bind(("name", rel.head.clone()))
+            .await;
+            
+        let _ = db.query("UPDATE type::thing('entity', $id) SET name = $name RETURN NONE")
+            .bind(("id", tail_safe.clone()))
+            .bind(("name", rel.tail.clone()))
+            .await;
+
+        // 2-1. 관계 생성
+        let sql = "
+            RELATE $h -> related_to -> $t
+            CONTENT {
+                relation: $rel,
+                reason: $reason,
+                created_at: time::now()
+            }
+        ";
+        
+        let _ = db.query(sql)
+            .bind(("h", head_thing)) // Thing 객체 바인딩
+            .bind(("t", tail_thing)) // Thing 객체 바인딩
+            .bind(("rel", rel.relation.clone()))
+            .bind(("reason", rel.reason.clone()))
+            .await
+            .map_err(|e| format!("Relate Entity-Entity Error: {}", e))?;
+    }
+
+    Ok(())
 }

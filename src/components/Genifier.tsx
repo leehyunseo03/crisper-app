@@ -4,12 +4,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import GraphVisualizer from './GraphVisualizer';
 
+interface SelectedNode {
+  id: string;
+  group: string;
+  label: string;
+  info?: string;
+}
+
 export default function Genifier() {
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [log, setLog] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [refreshGraph, setRefreshGraph] = useState(0);
   const [isPanelOpen, setIsPanelOpen] = useState(true);
+  const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
   const [useGpu, setUseGpu] = useState(false);
 
   const handleToggleGpu = async () => {
@@ -69,14 +77,73 @@ export default function Genifier() {
     }
   };
 
+  const handleNodeClick = (node: any) => {
+    setSelectedNode({
+      id: node.id,
+      group: node.group,
+      label: node.label,
+      info: node.info
+    });
+    
+    // 백엔드 로그 호출 (기존에 작성하신 rust command 호출)
+    invoke("log_node_click", {
+      nodeId: node.id,
+      group: node.group,
+      label: node.label,
+      info: node.info || null
+    }).catch(console.error);
+  };
+
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", backgroundColor: "#1e1e2e" }}>
       
       {/* --- Layer 1: 배경 그래프 --- */}
       <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>
         {/* viewMode를 "all"로 전달하여 모든 노드 조회 */}
-        <GraphVisualizer refreshKey={refreshGraph} viewMode="all" />
+        <GraphVisualizer 
+        refreshKey={refreshGraph} 
+        viewMode="all" 
+        onNodeClick={handleNodeClick}
+        />
       </div>
+
+      {selectedNode && (
+        <div style={{
+          position: "absolute",
+          bottom: "20px",
+          left: "20px",
+          width: "300px",
+          backgroundColor: "rgba(30, 30, 46, 0.9)",
+          backdropFilter: "blur(10px)",
+          borderRadius: "12px",
+          border: "1px solid #89b4fa",
+          padding: "15px",
+          color: "#cdd6f4",
+          zIndex: 20,
+          boxShadow: "0 4px 20px rgba(0,0,0,0.5)"
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px" }}>
+            <span style={{ 
+              fontSize: "0.7rem", 
+              textTransform: "uppercase", 
+              backgroundColor: "#45475a", 
+              padding: "2px 6px", 
+              borderRadius: "4px",
+              color: "#89b4fa"
+            }}>
+              {selectedNode.group}
+            </span>
+            <button onClick={() => setSelectedNode(null)} style={{ background: 'none', border: 'none', color: '#f38ba8', cursor: 'pointer' }}>✕</button>
+          </div>
+          <h4 style={{ margin: "0 0 10px 0", color: "#f9e2af" }}>{selectedNode.label}</h4>
+          <p style={{ fontSize: "0.85rem", color: "#a6adc8", margin: 0 }}>
+            {selectedNode.info || "추가 정보가 없습니다."}
+          </p>
+          <div style={{ marginTop: "10px", fontSize: "0.7rem", color: "#585b70" }}>
+            ID: {selectedNode.id}
+          </div>
+        </div>
+      )}
 
       {/* --- Layer 2: 컨트롤 패널 --- */}
       <div 
