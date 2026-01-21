@@ -27,12 +27,17 @@ pub struct DocumentNode {
     pub metadata: HashMap<String, JsonValue>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ChunkNode {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Thing>,
     pub content: String,
     pub page_index: usize,
     pub embedding: Vec<f32>,
+    
+    // 🆕 청크별 요약 정보를 담을 필드 추가
+    #[serde(default)] 
+    pub metadata: HashMap<String, serde_json::Value>, 
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

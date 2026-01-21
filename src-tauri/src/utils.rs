@@ -7,6 +7,7 @@ use anyhow::Context;
 use rig::embeddings::{Embed, TextEmbedder, EmbedError};
 use serde::{Serialize, Deserialize};
 use regex::Regex;
+use lopdf::Document;
 
 // Rig용 구조체
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +27,30 @@ impl Embed for RigDoc {
 pub fn extract_text_from_pdf<P: AsRef<Path>>(file_path: P) -> anyhow::Result<String> {
     extract_text(file_path.as_ref())
         .with_context(|| format!("Failed to extract text from PDF: {:?}", file_path.as_ref()))
+}
+
+pub fn extract_pages_from_pdf<P: AsRef<Path>>(file_path: P) -> anyhow::Result<Vec<String>> {
+    // PDF 로드
+    let doc = Document::load(file_path.as_ref())?;
+    
+    let mut pages = Vec::new();
+    
+    // 페이지 번호 가져오기 및 정렬 (1페이지부터 순서대로)
+    let mut page_numbers: Vec<u32> = doc.get_pages().keys().cloned().collect();
+    page_numbers.sort();
+
+    for page_num in page_numbers {
+        // 해당 페이지의 텍스트만 추출
+        // lopdf의 extract_text는 간단한 추출을 제공합니다.
+        let text = doc.extract_text(&[page_num]).unwrap_or_default();
+        
+        // 빈 페이지는 제외하거나, 필요하다면 포함시킬 수 있습니다.
+        if !text.trim().is_empty() {
+            pages.push(text);
+        }
+    }
+
+    Ok(pages)
 }
 
 pub fn parse_kakao_talk_log<P: AsRef<Path>>(file_path: P) -> anyhow::Result<String> {

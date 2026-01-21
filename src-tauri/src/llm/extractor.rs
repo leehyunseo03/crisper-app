@@ -5,6 +5,72 @@ use std::error::Error;
 use reqwest::{Client, Response};
 use regex::Regex;
 
+#[derive(serde::Deserialize, Debug)]
+pub struct DocSummaryResult {
+    pub title: String,
+    pub summary: String,
+    pub tags: Vec<String>,
+}
+
+pub async fn summarize_document(
+    base_url: &str,
+    text: &str
+) -> Result<DocSummaryResult, Box<dyn Error + Send + Sync>> {
+    let client = reqwest::Client::new();
+    let model_name = "gpt-3.5-turbo"; // 혹은 사용 중인 모델명
+
+    let system_instruction = r#"
+    You are a Librarian AI. 
+    Analyze the given text snippet (first part of a document) and provide metadata.
+    
+    Output JSON format:
+    {
+        "title": "A concise title based on content",
+        "summary": "A 1-sentence summary in Korean",
+        "tags": ["tag1", "tag2", "tag3"]
+    }
+    
+    Rules:
+    1. Summary MUST be in Korean.
+    2. Tags can be English or Korean.
+    3. JSON only.
+    "#;
+
+    // 텍스트가 너무 길면 요약이 오래 걸리므로 앞부분 2000자만 사용
+    let truncated_text = if text.len() > 2000 { &text[0..2000] } else { text };
+
+    let payload = json!({
+        "model": model_name,
+        "messages": [
+            { "role": "system", "content": system_instruction },
+            { "role": "user", "content": truncated_text }
+        ],
+        "temperature": 0.3,
+        "response_format": { "type": "json_object" }
+    });
+
+    let endpoint = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    
+    let res = client.post(&endpoint).json(&payload).send().await?;
+    if !res.status().is_success() {
+        return Err("Summary LLM Request Failed".into());
+    }
+
+    let resp_json: Value = res.json().await?;
+    let content = resp_json["choices"][0]["message"]["content"].as_str().unwrap_or("{}");
+    
+    // 기존에 만든 clean_and_repair_json 재사용 (JSON 파싱 안전장치)
+    let cleaned = clean_and_repair_json(content);
+    
+    let result: DocSummaryResult = serde_json::from_str(&cleaned).unwrap_or(DocSummaryResult {
+        title: "Untitled".to_string(),
+        summary: "요약 실패".to_string(),
+        tags: vec![],
+    });
+
+    Ok(result)
+}
+
 // 직접 HTTP 요청을 보내기 위해 reqwest 사용
 pub async fn extract_knowledge(
     base_url: &str, 

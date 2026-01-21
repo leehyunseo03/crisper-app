@@ -148,8 +148,9 @@ async fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
-            crate::commands::ingest::process_pdfs,
-            crate::commands::ingest::process_kakao_log,
+            crate::commands::ingest::ingest_documents,
+            crate::commands::ingest::construct_graph,
+            crate::commands::ingest::get_documents,
             crate::commands::query::fetch_graph_data,
             toggle_gpu, // 👈 커맨드 등록!
         ])
