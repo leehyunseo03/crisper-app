@@ -99,10 +99,10 @@ async fn start_servers(app: &AppHandle, use_gpu: bool) {
                 let log = String::from_utf8_lossy(&line);
                 // 너무 많은 로그가 나오지 않게 중요한 정보만 필터링해서 출력
                 if log.contains("CUDA") || log.contains("offloading") || log.contains("listening") {
-                    println!("[Chat-8081] {}", log.trim());
+                    //println!("[Chat-8081] {}", log.trim());
                 }
             } else if let CommandEvent::Stderr(line) = event {
-                eprintln!("[Chat-ERR] {}", String::from_utf8_lossy(&line).trim());
+                //eprintln!("[Chat-ERR] {}", String::from_utf8_lossy(&line).trim());
             }
         }
     });
@@ -149,6 +149,7 @@ async fn main() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             crate::commands::ingest::process_pdfs,
+            crate::commands::ingest::process_kakao_log,
             crate::commands::query::fetch_graph_data,
             toggle_gpu, // 👈 커맨드 등록!
         ])

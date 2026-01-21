@@ -9,6 +9,9 @@ use std::collections::HashMap;
 // Graph Nodes
 // =======================
 
+fn default_string() -> String { "".to_string() }
+fn default_category() -> String { "General".to_string() } // 카테고리 없으면 'General'로 자동 채움
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventNode {
     pub id: Option<Thing>,
@@ -75,25 +78,41 @@ pub struct KnowledgeEdge {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LlmExtractionResult {
+    #[serde(default)]
     pub entities: Vec<LlmEntity>,
+    #[serde(default)]
     pub relations: Vec<LlmRelation>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LlmEntity {
+    // 이름이 없으면 "Unknown" 처리
+    #[serde(default = "default_string")]
     pub name: String,
+    
+    // 🚨 [핵심 수정] category 필드가 없으면 에러 내지 말고 "General"로 채워라
+    #[serde(default = "default_category")] 
     pub category: String,
+    
+    // summary가 없으면 빈 문자열로 채워라
+    #[serde(default = "default_string")] 
     pub summary: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LlmRelation {
+    #[serde(default = "default_string")]
     pub head: String,
+    
+    #[serde(default = "default_string")]
     pub relation: String,
+    
+    #[serde(default = "default_string")]
     pub tail: String,
+    
+    #[serde(default = "default_string")]
     pub reason: String,
 }
-
 // =======================
 // UI Visualization
 // =======================

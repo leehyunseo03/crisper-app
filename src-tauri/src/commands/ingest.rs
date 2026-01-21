@@ -15,6 +15,104 @@ use crate::utils::sanitize_id;
 use crate::utils::{extract_text_from_pdf, chunk_text, RigDoc};
 use crate::llm::extractor::extract_knowledge;
 use crate::AppState;
+use crate::utils::parse_kakao_talk_log;
+
+#[tauri::command]
+pub async fn process_kakao_log(
+    file_path: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let db = &state.db;
+    let path_obj = Path::new(&file_path);
+    let filename = path_obj.file_name().unwrap().to_string_lossy().to_string();
+
+    println!("📂 Ingesting Kakao Log: {}", filename);
+
+    // 1. 텍스트 추출 (카카오톡 포맷)
+    let text = parse_kakao_talk_log(&file_path).map_err(|e| e.to_string())?;
+    if text.trim().is_empty() {
+        return Err("File is empty".to_string());
+    }
+
+    // 2. 세션(Event) 생성
+    let session_id = Uuid::new_v4().to_string();
+    let _event: EventNode = db.create(("event", &session_id))
+        .content(EventNode {
+            id: None,
+            summary: format!("KakaoTalk Import: {}", filename),
+            created_at: Utc::now(),
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("Failed to create event")?;
+
+    // 3. Document 생성
+    let doc_id = Uuid::new_v4().to_string();
+    let _doc: DocumentNode = db.create(("document", &doc_id))
+        .content(DocumentNode { 
+            id: None, filename: filename.clone(), 
+            created_at: Utc::now(), metadata: Default::default() 
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("Failed to create document")?;
+
+    // Event -> Document 연결
+    let _ = db.query("RELATE $e->imported->$d")
+        .bind(("e", session_id.clone())).bind(("d", format!("document:{}", doc_id)))
+        .await.map_err(|e| e.to_string())?;
+
+    // 4. 청킹 (대화 흐름을 끊지 않기 위해 조금 더 크게 잡거나 오버랩을 둡니다)
+    let chunks = chunk_text(&text, 1500, 200);
+
+    // 5. 청크 저장 및 지식 추출 루프
+    for (i, txt) in chunks.iter().enumerate() {
+        let chunk_uuid = Uuid::new_v4().to_string();
+        let dummy_embedding: Vec<f32> = vec![]; // 임베딩은 일단 생략 (기존 코드 유지)
+
+        // Chunk 저장
+        let _chunk: ChunkNode = db.create(("chunk", &chunk_uuid))
+            .content(ChunkNode {
+                id: None, 
+                content: txt.clone(), 
+                page_index: i, 
+                embedding: dummy_embedding
+            })
+            .await.map_err(|e| e.to_string())?
+            .ok_or("Failed to create chunk")?;
+
+        // Document -> Chunk 연결
+        db.query("RELATE $d->contains->$c")
+            .bind(("d", format!("document:{}", doc_id)))
+            .bind(("c", format!("chunk:{}", chunk_uuid)))
+            .await.map_err(|e| e.to_string())?;
+
+        let gen_url = "http://127.0.0.1:8081/v1"; 
+
+        // 🧠 지식 추출
+        // 카카오톡은 대화체이므로 LLM이 '화자'와 '주제'를 잘 연결하는지 확인이 중요합니다.
+        if i < 20 { 
+            println!("🤖 Extracting info from Kakao chunk {}...", i);
+            
+            // 기존 extract_knowledge 함수 재사용
+            match extract_knowledge(gen_url, txt).await {
+                Ok(result) => {
+                    // DB 저장 로직 (기존 save_graph_data 함수 재사용)
+                    if let Err(e) = save_graph_data(db, chunk_uuid.clone(), &result).await {
+                         eprintln!("❌ Failed to save graph data: {}", e);
+                    } else {
+                         println!("✅ Graph Data Saved (Chunk {})", i);
+                    }
+                },
+                Err(e) => {
+                    println!("❌ Extraction failed: {}", e);
+                }
+            }
+        }
+    }
+
+    Ok("Kakao Log Processed Successfully".to_string())
+}
 
 #[tauri::command]
 pub async fn process_pdfs(
@@ -53,8 +151,8 @@ pub async fn process_pdfs(
         // 2. 텍스트 추출 & 청킹
         let text = extract_text_from_pdf(&path).map_err(|e| e.to_string())?;
         if text.trim().is_empty() { continue; }
-        let chunks = chunk_text(&text, 1000, 100);
-
+        let chunks = chunk_text(&text, 800, 100); 
+        
         // 3. Document 생성
         let doc_id = Uuid::new_v4().to_string();
         let _doc: DocumentNode = db.create(("document", &doc_id))

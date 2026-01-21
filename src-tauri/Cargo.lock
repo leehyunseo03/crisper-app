@@ -1298,6 +1298,7 @@ dependencies = [
  "futures",
  "log",
  "pdf-extract",
+ "regex",
  "reqwest 0.13.1",
  "rig-core",
  "schemars 1.2.0",

@@ -19,6 +19,7 @@ export default function Genifier() {
   const [isPanelOpen, setIsPanelOpen] = useState(true);
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
   const [useGpu, setUseGpu] = useState(false);
+  const [kakaoPath, setKakaoPath] = useState<string | null>(null);
 
   const handleToggleGpu = async () => {
     const nextState = !useGpu;
@@ -52,6 +53,46 @@ export default function Genifier() {
     } catch (error) {
       console.error(error);
       setLog(`에러: ${String(error)}`);
+    }
+  };
+
+  const handleSelectKakaoFile = async () => {
+    try {
+      const path = await open({
+        directory: false, // 파일 선택
+        multiple: false,
+        filters: [{ name: 'Text', extensions: ['txt'] }] // .txt 필터
+      });
+      if (path && typeof path === 'string') { // string 체크
+        setKakaoPath(path);
+        setLog(prev => prev + `\n💬 카톡 파일 선택됨: ${path}`);
+        setStatus("idle");
+      }
+    } catch (error) {
+      console.error(error);
+      setLog(prev => prev + `\n❌ 파일 선택 에러: ${String(error)}`);
+    }
+  };
+
+  // 🆕 카카오톡 처리 시작 핸들러
+  const handleStartKakaoProcess = async () => {
+    if (!kakaoPath) return;
+    try {
+      setStatus("loading");
+      setLog((prev) => prev + `\n🚀 카카오톡 분석 시작...`);
+      
+      // Rust 커맨드 호출
+      const result = await invoke<string>("process_kakao_log", {
+        filePath: kakaoPath, // Rust 인자 이름 snake_case 주의 (여기서는 Rust에서 file_path로 받음, 타우리는 자동 변환해주지만 확실하게 하려면 rename_all 확인 필요. 보통 camelCase -> snake_case 자동 매핑됨)
+      });
+
+      setLog((prev) => prev + `\n✅ 완료: ${result}`);
+      setStatus("success");
+      setRefreshGraph(prev => prev + 1);
+    } catch (error) {
+      console.error(error);
+      setLog((prev) => prev + `\n❌ 실패: ${String(error)}`);
+      setStatus("error");
     }
   };
 
@@ -240,10 +281,38 @@ export default function Genifier() {
                 fontSize: "0.85rem"
               }}
             >
-              {selectedPath || "📂 폴더 선택하기..."}
+              {selectedPath || "📂 PDF 폴더 선택하기..."}
             </button>
           </div>
+          
+          <div style={{ marginBottom: "20px" }}>
+            <label style={{ display: "block", color: "#f9e2af", marginBottom: "8px", fontSize: "0.9rem" }}>KakaoTalk Log (.txt)</label>
+            <button
+              onClick={handleSelectKakaoFile}
+              style={{
+                width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #45475a",
+                backgroundColor: "#313244", color: kakaoPath ? "#a6e3a1" : "#cdd6f4",
+                cursor: "pointer", textAlign: "left", whiteSpace: "nowrap", overflow: "hidden", 
+                textOverflow: "ellipsis", fontSize: "0.85rem", marginBottom: "10px"
+              }}
+            >
+              {kakaoPath ? `📄 ...${kakaoPath.slice(-20)}` : "💬 대화 내역 선택 (.txt)"}
+            </button>
 
+            <button
+              onClick={handleStartKakaoProcess}
+              disabled={!kakaoPath || status === "loading"}
+              style={{
+                width: "100%", padding: "10px", borderRadius: "8px", border: "none",
+                backgroundColor: (!kakaoPath || status === "loading") ? "#45475a" : "#f9e2af", // 카톡은 노란색 테마
+                color: (!kakaoPath || status === "loading") ? "#a6adc8" : "#1e1e2e",
+                fontWeight: "bold", cursor: (!kakaoPath || status === "loading") ? "not-allowed" : "pointer"
+              }}
+            >
+               {status === "loading" && kakaoPath ? "⏳ 대화 분석 중..." : "🚀 카톡 분석"}
+            </button>
+          </div>
+          
           <button
             onClick={handleStartEmbedding}
             disabled={!selectedPath || status === "loading"}
@@ -268,7 +337,7 @@ export default function Genifier() {
               backgroundColor: "#11111b",
               padding: "10px",
               borderRadius: "6px",
-              height: "150px",
+              height: "150px",  
               overflowY: "auto",
               fontSize: "0.75rem",
               fontFamily: "monospace",

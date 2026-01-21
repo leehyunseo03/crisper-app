@@ -1,9 +1,12 @@
 // src-tauri/src/utils.rs
+use std::fs;
 use std::path::Path;
+use std::io::Read;
 use pdf_extract::extract_text;
 use anyhow::Context;
 use rig::embeddings::{Embed, TextEmbedder, EmbedError};
 use serde::{Serialize, Deserialize};
+use regex::Regex;
 
 // Rig용 구조체
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +26,32 @@ impl Embed for RigDoc {
 pub fn extract_text_from_pdf<P: AsRef<Path>>(file_path: P) -> anyhow::Result<String> {
     extract_text(file_path.as_ref())
         .with_context(|| format!("Failed to extract text from PDF: {:?}", file_path.as_ref()))
+}
+
+pub fn parse_kakao_talk_log<P: AsRef<Path>>(file_path: P) -> anyhow::Result<String> {
+    let mut file = std::fs::File::open(file_path)?;
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut file, &mut content)?;
+
+    // 🌟 [수정] 정규식으로 카톡 패턴 정리
+    // 패턴: [이름] [시간] 내용 -> 이름: 내용
+    let re = Regex::new(r"\[(.*?)\] \[(.*?)\] (.*)").unwrap();
+    
+    let cleaned_lines: Vec<String> = content.lines()
+        .map(|line| {
+            if let Some(caps) = re.captures(line) {
+                let name = &caps[1];
+                // 시간(&caps[2])은 지식 그래프에 중요하지 않으니 제거
+                let message = &caps[3];
+                format!("{}: {}", name, message)
+            } else {
+                // 날짜 구분선 등은 그대로 둠
+                line.to_string()
+            }
+        })
+        .collect();
+
+    Ok(cleaned_lines.join("\n"))
 }
 
 // 🚨 pub 추가
