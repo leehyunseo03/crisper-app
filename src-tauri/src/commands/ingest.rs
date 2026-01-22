@@ -6,13 +6,14 @@ use uuid::Uuid;
 use chrono::Utc;
 use surrealdb::engine::local::Db;
 use surrealdb::Surreal;
-use surrealdb::sql::Thing;
+use surrealdb::sql::{Thing, Id};
 use rig::embeddings::EmbeddingsBuilder;
 use rig::client::EmbeddingsClient;
 use std::collections::HashMap;
 use serde_json::json;
 use std::time::Instant;
 use serde::{Serialize, Deserialize};
+use std::collections::HashSet;
 
 use crate::models::{EventNode, DocumentNode, ChunkNode, EntityNode, LlmExtractionResult};
 use crate::utils::sanitize_id;
@@ -100,7 +101,7 @@ pub async fn ingest_documents(
         println!("    🤖 Summarizing Document (Parent)...");
         let parent_summary = summarize_document(gen_url, &summary_context).await.unwrap_or_else(|_| {
              crate::llm::extractor::DocSummaryResult {
-                title: original_filename.clone(), summary: "Parent Summary Failed".to_string(), tags: vec![]
+                title: original_filename.clone(), summary: "Parent Summary Failed".to_string(), tags: vec![], keywords: vec![],
             }
         });
 
@@ -138,7 +139,8 @@ pub async fn ingest_documents(
                  crate::llm::extractor::DocSummaryResult {
                     title: format!("Page {}", i+1), // LLM 실패시 "Page 1" 등으로 제목 설정
                     summary: "요약 실패".to_string(),
-                    tags: vec![]
+                    tags: vec![],
+                    keywords: vec![]
                 }
             });
             println!("Done");
@@ -147,8 +149,9 @@ pub async fn ingest_documents(
             chunk_meta.insert("title".to_string(), json!(chunk_res.title)); // "서론", "결론" 등 페이지 내용을 반영한 제목
             chunk_meta.insert("summary".to_string(), json!(chunk_res.summary));
             chunk_meta.insert("tags".to_string(), json!(chunk_res.tags));
+            chunk_meta.insert("keywords".to_string(), json!(chunk_res.keywords));
             chunk_meta.insert("page_number".to_string(), json!(i + 1)); // 🌟 몇 페이지인지 메타데이터에 추가
-
+            
             // Chunk 저장
             let _chunk: ChunkNode = db.create(("chunk", &chunk_uuid))
                 .content(ChunkNode {
@@ -186,14 +189,13 @@ pub async fn construct_graph(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let db = &state.db;
-    let gen_url = "http://127.0.0.1:8081/v1";
 
-    println!("🕸️ [Step 2] Building Knowledge Graph...");
+    println!("\n🕸️ [Step 2] Building Keyword Graph (No LLM)...");
 
-    // 1. 아직 처리되지 않은(mentions 관계가 없는) Chunk들을 조회
-    //    주의: surrealql 문법에 따라 `count(->mentions) = 0` 사용
-    //    성능을 위해 한 번에 10개씩만 처리하거나 루프를 돕니다. 여기선 예시로 20개 제한.
-    let mut chunks_to_process: Vec<ChunkNode> = db.query("SELECT * FROM chunk WHERE count(->mentions) = 0 LIMIT 20")
+    // 1. 아직 처리되지 않은 Chunk 조회 (한 번에 500개도 거뜬함)
+    let sql = "SELECT * FROM chunk WHERE metadata.step2_processed != true LIMIT 500";
+    
+    let mut chunks_to_process: Vec<ChunkNode> = db.query(sql)
         .await.map_err(|e| e.to_string())?
         .take(0).map_err(|e| e.to_string())?;
 
@@ -202,34 +204,83 @@ pub async fn construct_graph(
     }
 
     let total = chunks_to_process.len();
-    println!("   🚀 Processing {} chunks...", total);
+    println!(" 🚀 Linking {} chunks based on tags/keywords...", total);
 
-    for (idx, chunk) in chunks_to_process.iter().enumerate() {
-        let chunk_id_raw = chunk.id.as_ref().unwrap().id.to_string(); // thing에서 id 부분만 추출 필요할 수 있음
-        // SurrealDB Rust SDK의 Thing.id는 Id 타입이므로 to_string()하면 괄호 등이 포함될 수 있음.
-        // 안전하게 Thing 자체를 사용하거나 String으로 변환. 여기선 String 변환 가정.
-        
-        // 2. LLM 추출
-        match extract_knowledge(gen_url, &chunk.content).await {
-            Ok(result) => {
-                // 3. 그래프 데이터 저장 (재사용)
-                // chunk_id_raw가 "chunk:uuid" 형태인지 "uuid" 형태인지 확인 필요.
-                // save_graph_data는 "uuid" 문자열을 기대하도록 작성되었음.
-                let simple_id = chunk_id_raw.replace("chunk:", "").replace("⟨", "").replace("⟩", "");
-                
-                if let Err(e) = save_graph_data(db, simple_id, &result).await {
-                    eprintln!("❌ Save Error: {}", e);
-                } else {
-                    println!("   ✅ [{}/{}] Graph extracted for chunk", idx + 1, total);
+    let mut success_count = 0;
+
+    for chunk in chunks_to_process.iter() {
+        let chunk_thing = match &chunk.id {
+            Some(t) => t.clone(),
+            None => continue,
+        };
+
+        // 2. 메타데이터에서 태그와 키워드 수집
+        // 중복 제거를 위해 HashSet 사용
+        let mut topics: HashSet<String> = HashSet::new();
+
+        // (1) Tags 가져오기
+        if let Some(tags_val) = chunk.metadata.get("tags") {
+            if let Some(arr) = tags_val.as_array() {
+                for t in arr {
+                    if let Some(s) = t.as_str() {
+                        topics.insert(s.trim().to_string());
+                    }
                 }
-            },
-            Err(e) => eprintln!("❌ Extraction Error: {}", e),
+            }
         }
+
+        // (2) Keywords 가져오기 (이전 질문에서 추가한 필드)
+        if let Some(kws_val) = chunk.metadata.get("keywords") {
+            if let Some(arr) = kws_val.as_array() {
+                for k in arr {
+                    if let Some(s) = k.as_str() {
+                        topics.insert(s.trim().to_string());
+                    }
+                }
+            }
+        }
+
+        // 3. 각 토픽을 Entity로 만들고 연결하기
+        for topic in topics {
+            if topic.is_empty() { continue; }
+
+            let safe_name = crate::utils::sanitize_id(&topic); // ID용으로 특수문자 제거
+            let entity_id = Thing::from(("entity", safe_name.as_str()));
+
+            // 3-1. Entity 생성 (단순 Upsert)
+            // LLM 요약이 없으므로 description은 topic 이름 그대로 씀
+            let _: Option<EntityNode> = db
+                .upsert(("entity", &safe_name))
+                .content(EntityNode {
+                    id: Some(entity_id.clone()),
+                    name: topic.clone(),
+                    category: "Keyword".to_string(), // 카테고리 통일
+                    description: format!("Extracted keyword: {}", topic),
+                    embedding: vec![],
+                    created_at: Utc::now(),
+                })
+                .await.ok().flatten();
+
+            // 3-2. 연결 (Chunk -> mentions -> Entity)
+            let sql = "RELATE $c -> mentions -> $e";
+            let _ = db.query(sql)
+                .bind(("c", chunk_thing.clone()))
+                .bind(("e", entity_id))
+                .await.ok();
+        }
+
+        // 4. 처리 완료 마킹
+        let _: Option<ChunkNode> = db.update(("chunk", chunk_thing.id.to_string()))
+            .merge(json!({
+                "metadata": { "step2_processed": true }
+            }))
+            .await.ok().flatten();
+
+        success_count += 1;
     }
 
-    Ok(format!("✅ {}개 Chunk에 대한 그래프 생성 완료", total))
+    Ok(format!("✅ {}/{} 개의 청크 연결 완료 (고속 모드)", success_count, total))
 }
-
 
 
 #[tauri::command]
@@ -258,23 +309,22 @@ pub async fn get_documents(state: State<'_, AppState>) -> Result<Vec<DocumentWit
 
 async fn save_graph_data(
     db: &Surreal<Db>,
-    chunk_id: String,
+    chunk_id: &Thing, // 🌟 String 대신 Thing을 직접 받음 (안전함)
     data: &LlmExtractionResult,
 ) -> Result<(), String> {
     
-    // 1. Entity 저장 및 Chunk와 연결
+    // 1. Entities 저장 및 Chunk -> Entity 연결
     for entity in &data.entities {
         let safe_name = sanitize_id(&entity.name);
         
-        // 🌟 [수정 핵심] Rust에서 직접 Thing(ID) 객체 생성
-        let chunk_thing = Thing::from(("chunk", chunk_id.as_str()));
-        let entity_thing = Thing::from(("entity", safe_name.as_str()));
+        // Entity ID 생성 (entity:이름)
+        let entity_id = Thing::from(("entity", safe_name.as_str()));
 
-        // 1-1. Entity 생성/업데이트
+        // 1-1. Entity 노드 생성 (Upsert)
         let _: Option<EntityNode> = db
             .upsert(("entity", &safe_name))
             .content(EntityNode {
-                id: None,
+                id: Some(entity_id.clone()),
                 name: entity.name.clone(),
                 category: entity.category.clone(),
                 description: entity.summary.clone(),
@@ -284,41 +334,32 @@ async fn save_graph_data(
             .await
             .map_err(|e| format!("Entity Upsert Error: {}", e))?;
 
-        // 1-2. Chunk -> Entity 연결 (SQL이 훨씬 깔끔해집니다)
-        // 기존: RELATE type::thing(...) -> ...
-        // 변경: RELATE $c -> mentions -> $e
+        // 1-2. Chunk -> mentions -> Entity 연결
+        // "이 청크(문서 조각)가 이 엔티티를 언급했다"
         let sql = "RELATE $c -> mentions -> $e";
-        
         let _ = db.query(sql)
-            // 🌟 String 대신 Thing 객체를 바인딩합니다.
-            // DB는 이걸 받아서 "아, 이건 문자열이 아니라 레코드 ID구나"라고 바로 인식합니다.
-            .bind(("c", chunk_thing)) 
-            .bind(("e", entity_thing))
+            .bind(("c", chunk_id.clone())) 
+            .bind(("e", entity_id))
             .await
             .map_err(|e| format!("Relate Chunk-Entity Error: {}", e))?;
     }
 
-    // 2. Relation (Entity -> Entity) 저장
+    // 2. Relations (Entity -> Entity) 저장
     for rel in &data.relations {
         let head_safe = sanitize_id(&rel.head);
         let tail_safe = sanitize_id(&rel.tail);
 
-        // 🌟 여기도 Thing 객체 생성
         let head_thing = Thing::from(("entity", head_safe.as_str()));
         let tail_thing = Thing::from(("entity", tail_safe.as_str()));
 
-        // Head/Tail 노드 이름 보장 (빈 껍데기 생성)
+        // 관계의 양 끝 노드가 존재하도록 빈 껍데기라도 생성 (이미 있으면 이름만 업데이트)
+        // 이는 LLM이 추출한 관계의 대상이 위 entity 리스트에 없을 수도 있기 때문입니다.
         let _ = db.query("UPDATE type::thing('entity', $id) SET name = $name RETURN NONE")
-            .bind(("id", head_safe.clone()))
-            .bind(("name", rel.head.clone()))
-            .await;
-            
+            .bind(("id", head_safe.clone())).bind(("name", rel.head.clone())).await;
         let _ = db.query("UPDATE type::thing('entity', $id) SET name = $name RETURN NONE")
-            .bind(("id", tail_safe.clone()))
-            .bind(("name", rel.tail.clone()))
-            .await;
+            .bind(("id", tail_safe.clone())).bind(("name", rel.tail.clone())).await;
 
-        // 2-1. 관계 생성
+        // 2-1. Entity -> related_to -> Entity 연결
         let sql = "
             RELATE $h -> related_to -> $t
             CONTENT {
@@ -329,8 +370,8 @@ async fn save_graph_data(
         ";
         
         let _ = db.query(sql)
-            .bind(("h", head_thing)) // Thing 객체 바인딩
-            .bind(("t", tail_thing)) // Thing 객체 바인딩
+            .bind(("h", head_thing))
+            .bind(("t", tail_thing))
             .bind(("rel", rel.relation.clone()))
             .bind(("reason", rel.reason.clone()))
             .await
@@ -339,3 +380,4 @@ async fn save_graph_data(
 
     Ok(())
 }
+

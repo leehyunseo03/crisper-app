@@ -1,15 +1,18 @@
 // src-tauri/src/llm/extractor.rs
 use crate::models::{LlmExtractionResult, LlmEntity, LlmRelation};
 use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use reqwest::{Client, Response};
 use regex::Regex;
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)] // Clone, Serialize 추가
 pub struct DocSummaryResult {
     pub title: String,
     pub summary: String,
     pub tags: Vec<String>,
+    #[serde(default)] 
+    pub keywords: Vec<String>, // 🆕 추가: 핵심 키워드 리스트
 }
 
 pub async fn summarize_document(
@@ -21,18 +24,19 @@ pub async fn summarize_document(
 
     let system_instruction = r#"
     You are a Librarian AI. 
-    Analyze the given text snippet (first part of a document) and provide metadata.
+    Analyze the given text snippet.
     
     Output JSON format:
     {
-        "title": "A concise title based on content",
-        "summary": "A 1-sentence summary in Korean",
-        "tags": ["tag1", "tag2", "tag3"]
+        "title": "Concise title",
+        "summary": "1-sentence summary in Korean",
+        "tags": ["General Category"],
+        "keywords": ["Entity1", "Entity2", "Technical Term"] 
     }
     
     Rules:
-    1. Summary MUST be in Korean.
-    2. Tags can be English or Korean.
+    1. 'keywords' must be specific nouns (e.g., 'Python', 'Transformer', 'Sam Altman').
+    2. Extract 3~5 key entities.
     3. JSON only.
     "#;
 
@@ -40,7 +44,7 @@ pub async fn summarize_document(
     let truncated_text = if text.len() > 2000 { &text[0..2000] } else { text };
 
     let payload = json!({
-        "model": model_name,
+        "model": "gpt-3.5-turbo", // main.rs의 alias 확인
         "messages": [
             { "role": "system", "content": system_instruction },
             { "role": "user", "content": truncated_text }
@@ -66,6 +70,7 @@ pub async fn summarize_document(
         title: "Untitled".to_string(),
         summary: "요약 실패".to_string(),
         tags: vec![],
+        keywords: vec![], // 실패 시 빈 배열
     });
 
     Ok(result)
