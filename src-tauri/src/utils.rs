@@ -1,50 +1,31 @@
-// src-tauri/src/utils.rs
-use std::fs;
 use std::path::Path;
-use std::io::Read;
-use pdf_extract::extract_text;
-use anyhow::Context;
-use rig::embeddings::{Embed, TextEmbedder, EmbedError};
-use serde::{Serialize, Deserialize};
-use regex::Regex;
 use lopdf::Document;
+use anyhow::Context;
 
-// Rig용 구조체
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RigDoc {
-    pub id: String,
-    pub content: String,
-}
-
-impl Embed for RigDoc {
-    fn embed(&self, embedder: &mut TextEmbedder) -> Result<(), EmbedError> {
-        embedder.embed(self.content.clone());
-        Ok(())
-    }
-}
-
-// 🚨 pub 추가
-pub fn extract_text_from_pdf<P: AsRef<Path>>(file_path: P) -> anyhow::Result<String> {
-    extract_text(file_path.as_ref())
-        .with_context(|| format!("Failed to extract text from PDF: {:?}", file_path.as_ref()))
-}
-
+/// PDF 파일에서 페이지별로 텍스트를 추출합니다.
+/// 
+/// # Arguments
+/// * `file_path` - PDF 파일의 경로
+/// 
+/// # Returns
+/// * `Ok(Vec<String>)` - 각 페이지의 텍스트가 담긴 리스트 (빈 페이지 제외)
 pub fn extract_pages_from_pdf<P: AsRef<Path>>(file_path: P) -> anyhow::Result<Vec<String>> {
-    // PDF 로드
-    let doc = Document::load(file_path.as_ref())?;
+    // PDF 로드 (lopdf crate 사용)
+    let doc = Document::load(file_path.as_ref())
+        .with_context(|| format!("Failed to load PDF: {:?}", file_path.as_ref()))?;
     
     let mut pages = Vec::new();
     
-    // 페이지 번호 가져오기 및 정렬 (1페이지부터 순서대로)
+    // 페이지 번호를 가져와서 순서대로 정렬 (1페이지부터)
     let mut page_numbers: Vec<u32> = doc.get_pages().keys().cloned().collect();
     page_numbers.sort();
 
     for page_num in page_numbers {
-        // 해당 페이지의 텍스트만 추출
-        // lopdf의 extract_text는 간단한 추출을 제공합니다.
+        // 해당 페이지의 텍스트 추출
+        // 실패 시 에러를 내지 않고 빈 문자열 처리하여 진행
         let text = doc.extract_text(&[page_num]).unwrap_or_default();
         
-        // 빈 페이지는 제외하거나, 필요하다면 포함시킬 수 있습니다.
+        // 내용이 있는 페이지만 결과에 포함
         if !text.trim().is_empty() {
             pages.push(text);
         }
@@ -53,57 +34,12 @@ pub fn extract_pages_from_pdf<P: AsRef<Path>>(file_path: P) -> anyhow::Result<Ve
     Ok(pages)
 }
 
-pub fn parse_kakao_talk_log<P: AsRef<Path>>(file_path: P) -> anyhow::Result<String> {
-    let mut file = std::fs::File::open(file_path)?;
-    let mut content = String::new();
-    std::io::Read::read_to_string(&mut file, &mut content)?;
-
-    // 🌟 [수정] 정규식으로 카톡 패턴 정리
-    // 패턴: [이름] [시간] 내용 -> 이름: 내용
-    let re = Regex::new(r"\[(.*?)\] \[(.*?)\] (.*)").unwrap();
-    
-    let cleaned_lines: Vec<String> = content.lines()
-        .map(|line| {
-            if let Some(caps) = re.captures(line) {
-                let name = &caps[1];
-                // 시간(&caps[2])은 지식 그래프에 중요하지 않으니 제거
-                let message = &caps[3];
-                format!("{}: {}", name, message)
-            } else {
-                // 날짜 구분선 등은 그대로 둠
-                line.to_string()
-            }
-        })
-        .collect();
-
-    Ok(cleaned_lines.join("\n"))
-}
-
-// 🚨 pub 추가
-pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut chunks = Vec::new();
-    let mut start = 0;
-
-    while start < chars.len() {
-        let end = std::cmp::min(start + chunk_size, chars.len());
-        let chunk: String = chars[start..end].iter().collect();
-        
-        if !chunk.trim().is_empty() {
-            chunks.push(chunk);
-        }
-        if end == chars.len() { break; }
-        start += chunk_size - overlap;
-    }
-    chunks
-}
-
-/// 텍스트를 SurrealDB ID safe한 문자열로 변환 (예: "Apple Inc." -> "apple_inc")
+/// 텍스트를 SurrealDB의 ID로 사용하기 적합한 형태(소문자, 특수문자 제거)로 변환합니다.
+/// 예: "Apple Inc." -> "apple_inc" (단, 여기서는 alphanumeric만 남기고 '_'로 치환)
 pub fn sanitize_id(text: &str) -> String {
     text.trim()
         .to_lowercase()
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
         .collect::<String>()
-        // 연속된 언더스코어 제거 등은 선택 사항
 }
